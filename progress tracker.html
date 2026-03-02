@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zero Progress Tracker Pro</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+:root {
+  --bg: #ffffff;
+  --card: #f4f6f9;
+  --text: #111;
+  --accent: #4f46e5;
+}
+body.dark { --bg:#0f172a; --card:#1e293b; --text:#f1f5f9; }
+body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text);}
+.container { max-width:500px; margin:auto; padding:20px; }
+h1 { text-align:center; font-size:22px; }
+.card { background:var(--card); padding:16px; border-radius:12px; margin-bottom:16px;}
+input, select { width:100%; padding:12px; margin-top:6px; margin-bottom:14px; border-radius:8px; border:none; font-size:16px; }
+button { width:100%; padding:14px; border-radius:10px; border:none; font-size:16px; font-weight:bold; background:var(--accent); color:white; margin-top:8px;}
+.stats { font-size:15px; line-height:1.6;}
+.streak { font-weight:bold; margin-top:8px;}
+.calendar { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; font-size:12px; }
+.day { padding:8px; text-align:center; border-radius:6px; background:#e5e7eb; }
+body.dark .day { background:#334155; }
+.day.active { background:var(--accent); color:white; }
+.top-bar { display:flex; justify-content:space-between; margin-bottom:10px; }
+.toggle { background:none; border:1px solid var(--text); padding:6px 10px; border-radius:20px; font-size:12px; cursor:pointer;}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="top-bar">
+    <div id="today"></div>
+    <button class="toggle" onclick="toggleDark()">🌙 Mode</button>
+  </div>
+
+  <h1>Zero Progress Tracker Pro</h1>
+
+  <div class="card">
+    <label>Daily Goals (optional)</label>
+    <input type="number" id="goalLearning" placeholder="Learning Hours Goal">
+    <input type="number" id="goalTasks" placeholder="Tasks Goal">
+
+    <label>Income</label>
+    <input type="number" id="income">
+
+    <label>Learning Hours</label>
+    <input type="number" step="0.1" id="learning">
+
+    <label>Tasks Done</label>
+    <input type="number" id="tasks">
+
+    <button onclick="saveData()">Save Today</button>
+    <button id="exportPDFBtn" onclick="handleProPDF()">Export Weekly PDF</button>
+  </div>
+
+  <div class="card stats">
+    <div>Total Income: $<span id="totalIncome">0</span></div>
+    <div>Total Learning: <span id="totalLearning">0</span> hrs</div>
+    <div>Total Tasks: <span id="totalTasks">0</span></div>
+    <div class="streak">🔥 Streak: <span id="streak">0</span> days</div>
+  </div>
+
+  <div class="card">
+    <canvas id="progressChart"></canvas>
+  </div>
+
+  <div class="card">
+    <div style="margin-bottom:10px;font-weight:bold;">Calendar</div>
+    <div class="calendar" id="calendar"></div>
+  </div>
+</div>
+
+<script>
+const today = new Date();
+const todayStr = today.toISOString().split("T")[0];
+document.getElementById("today").innerText = todayStr;
+
+let data = JSON.parse(localStorage.getItem("trackerPro")) || { entries:{}, streak:0, lastEntry:null, goals:{} };
+let isPro = JSON.parse(localStorage.getItem("isPro")) || false;
+
+const incomeEl = document.getElementById("income");
+const learningEl = document.getElementById("learning");
+const tasksEl = document.getElementById("tasks");
+const totalIncomeEl = document.getElementById("totalIncome");
+const totalLearningEl = document.getElementById("totalLearning");
+const totalTasksEl = document.getElementById("totalTasks");
+const streakEl = document.getElementById("streak");
+const calendar = document.getElementById("calendar");
+const progressChart = document.getElementById("progressChart");
+const goalLearningEl = document.getElementById("goalLearning");
+const goalTasksEl = document.getElementById("goalTasks");
+
+function saveData() {
+  const income = parseFloat(incomeEl.value) || 0;
+  const learning = parseFloat(learningEl.value) || 0;
+  const tasks = parseInt(tasksEl.value) || 0;
+
+  data.entries[todayStr] = { income, learning, tasks };
+
+  const goalLearning = parseFloat(goalLearningEl.value);
+  const goalTasks = parseInt(goalTasksEl.value);
+  if(!isNaN(goalLearning)) data.goals.learning = goalLearning;
+  if(!isNaN(goalTasks)) data.goals.tasks = goalTasks;
+
+  updateStreak();
+  localStorage.setItem("trackerPro", JSON.stringify(data));
+  updateUI();
+
+  incomeEl.value = "";
+  learningEl.value = "";
+  tasksEl.value = "";
+}
+
+function updateStreak() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yStr = yesterday.toISOString().split("T")[0];
+
+  if(data.lastEntry === yStr) data.streak++;
+  else if(data.lastEntry !== todayStr) data.streak = 1;
+
+  data.lastEntry = todayStr;
+}
+
+function updateUI() {
+  let totalIncome=0, totalLearning=0, totalTasks=0;
+  Object.values(data.entries).forEach(e => { totalIncome+=e.income; totalLearning+=e.learning; totalTasks+=e.tasks; });
+
+  totalIncomeEl.innerText = totalIncome.toFixed(2);
+  totalLearningEl.innerText = totalLearning.toFixed(1);
+  totalTasksEl.innerText = totalTasks;
+  streakEl.innerText = data.streak;
+
+  renderChart();
+  renderCalendar();
+}
+
+function renderChart() {
+  const labels = Object.keys(data.entries).slice(-7);
+  const values = labels.map(d => data.entries[d].learning);
+
+  if(window.myChart) window.myChart.destroy();
+
+  window.myChart = new Chart(progressChart, {
+    type:"line",
+    data:{ labels, datasets:[{ label:"Learning Hours", data:values, borderColor:"#4f46e5", backgroundColor:"rgba(79,70,229,0.2)", borderWidth:2, fill:true, tension:0.3 }]},
+    options:{ responsive:true, plugins:{ legend:{ display:false } }, scales:{ y:{ beginAtZero:true } } }
+  });
+}
+
+function renderCalendar() {
+  calendar.innerHTML="";
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1,0).getDate();
+  for(let i=1;i<=daysInMonth;i++){
+    const d = new Date(today.getFullYear(), today.getMonth(), i);
+    const dStr = d.toISOString().split("T")[0];
+    const div=document.createElement("div");
+    div.className="day"; div.innerText=i;
+    if(data.entries[dStr]) div.classList.add("active");
+    calendar.appendChild(div);
+  }
+}
+
+function toggleDark(){ document.body.classList.toggle("dark"); }
+function requestNotification(){ if("Notification" in window) Notification.requestPermission(); }
+function dailyReminder(){ if(Notification.permission==="granted") new Notification("Track your progress 🚀",{body:"Log today's income, learning & tasks!"}); }
+requestNotification(); setTimeout(dailyReminder,5000);
+updateUI();
+
+function handleProPDF() {
+  if(!isPro){
+    const confirmPay = confirm("This is a Pro feature. Unlock for ₦1,000? (Simulated)");
+    if(confirmPay){
+      // Simulate successful payment
+      isPro=true;
+      localStorage.setItem("isPro", true);
+      alert("🎉 Pro unlocked! You can now export PDF and view weekly summary.");
+      exportPDF();
+    } else {
+      alert("Upgrade to Pro to export PDF and view weekly summary.");
+    }
+  } else {
+    exportPDF();
+  }
+}
+
+function exportPDF() {
+  if(!isPro) return alert("Upgrade to Pro to export PDF.");
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16);
+  doc.text("Zero Progress Tracker Weekly Report", 10, 20);
+
+  let y=30;
+  const last7days = Object.keys(data.entries).slice(-7);
+  last7days.forEach(d=>{
+    const e=data.entries[d];
+    doc.setFontSize(12);
+    doc.text(`${d}: Income $${e.income}, Learning ${e.learning}h, Tasks ${e.tasks}`, 10, y);
+    y+=8;
+  });
+  doc.text(`🔥 Current Streak: ${data.streak} days`, 10, y+5);
+  doc.save("weekly_report.pdf");
+}
+</script>
+</body>
+</html>
